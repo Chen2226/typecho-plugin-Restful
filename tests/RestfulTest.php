@@ -25,7 +25,8 @@ class RestfulTest extends TestCase
             'proxy' => false,
 
             'headers' => array(
-                'token' => getenv('WEB_SERVER_TOKEN')
+                'token' => getenv('WEB_SERVER_TOKEN'),
+                'Origin' => 'unit'
             )
         ));
 
@@ -244,11 +245,11 @@ class RestfulTest extends TestCase
         $response = self::$client->post('/index.php/api/upload', array(
             'multipart' => array(
                 array(
-                    'name'     => 'authorId',
+                    'name' => 'authorId',
                     'contents' => '1',
                 ),
                 array(
-                    'name'     => 'file',
+                    'name' => 'file',
                     'contents' => fopen($filePath, 'r'),
                     'filename' => basename($filePath),
                 ),

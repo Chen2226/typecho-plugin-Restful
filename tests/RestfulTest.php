@@ -35,6 +35,7 @@ class RestfulTest extends TestCase
             'server' => getenv('MYSQL_HOST'),
             'username' => getenv('MYSQL_USER'),
             'password' => getenv('MYSQL_PWD'),
+            'port' => getenv('MYSQL_PORT')
         ));
     }
 
@@ -233,5 +234,51 @@ class RestfulTest extends TestCase
             'type' => 'tag',
         ));
         $this->assertTrue(is_numeric($count));
+    }
+
+    public function testUpload()
+    {
+        $filePath = __DIR__ . '/test.jpg';
+        $this->assertFileExists($filePath, '测试文件不存在');
+
+        $response = self::$client->post('/index.php/api/upload', array(
+            'multipart' => array(
+                array(
+                    'name'     => 'authorId',
+                    'contents' => '1',
+                ),
+                array(
+                    'name'     => 'file',
+                    'contents' => fopen($filePath, 'r'),
+                    'filename' => basename($filePath),
+                ),
+            ),
+        ));
+
+        $result = json_decode($response->getBody(), true);
+        $this->assertEquals('success', $result['status']);
+        $this->assertTrue(is_string($result['data']['url'] ?? null));
+
+        $count = self::$db->count('typecho_contents', array(
+            'type' => 'attachment',
+            'cid' => $result['data']['cid']
+        ));
+        $this->assertGreaterThan(0, $count, '数据库中应存在该文件');
+
+        $listResponse = self::$client->get('/index.php/api/fileList?page=1&pageSize=1&authorId=1');
+        $listResult = json_decode($listResponse->getBody(), true);
+        $this->assertEquals('success', $listResult['status']);
+        $this->assertTrue(is_array($listResult['data']));
+
+        $delResponse = self::$client->post('/index.php/api/deleteFile', array(
+            RequestOptions::JSON => array(
+                'cid' => $listResult['data']['dataSet'][0]['cid'],
+                'pageSize' => '1',
+                'authorId' => '1',
+            ),
+        ));
+        $delResult = json_decode($delResponse->getBody(), true);
+        $this->assertEquals('success', $delResult['status']);
+        $this->assertTrue($delResult['data']['deleted'] ?? false);
     }
 }

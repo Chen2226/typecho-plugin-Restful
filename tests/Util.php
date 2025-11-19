@@ -1,4 +1,5 @@
 <?php
+
 namespace MoeFront\RestfulTests;
 
 use Exception;
@@ -97,15 +98,17 @@ class Util
     public static function installTypecho()
     {
         exec(sprintf(
-            "echo 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s`;' | mysql -u %s --password=%s",
+            "echo 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s`;' | mysql -P %s -u %s --password=%s ",
             getenv('MYSQL_DB'),
             getenv('MYSQL_DB'),
+            getenv('MYSQL_PORT'),
             getenv('MYSQL_USER'),
             getenv('MYSQL_PWD')
         ));
 
         exec(sprintf(
-            'mysql -u %s --password=%s %s < %s',
+            'mysql -P %s -u %s --password=%s %s < %s',
+            getenv('MYSQL_PORT'),
             getenv('MYSQL_USER'),
             getenv('MYSQL_PWD'),
             getenv('MYSQL_DB'),
@@ -172,7 +175,7 @@ $db->addServer(array (
   "user" => "%s",
   "password" => "%s",
   "charset" => "utf8mb4",
-  "port" => "3306",
+  "port" => "%s",
   "database" => "%s",
   "engine" => "InnoDB",
 ), Typecho_Db::READ | Typecho_Db::WRITE);
@@ -181,7 +184,7 @@ Typecho_Db::set($db);
 define("WEB_SERVER_PORT", "%s");
 define("FORKED_WEB_SERVER_PORT", "%s");
 define("IN_PHPUNIT_SERVER", true);
-', getenv('MYSQL_HOST'), getenv('MYSQL_USER'), getenv('MYSQL_PWD'), getenv('MYSQL_DB'), getenv('WEB_SERVER_PORT'), getenv('FORKED_WEB_SERVER_PORT'));
+', getenv('MYSQL_HOST'), getenv('MYSQL_USER'), getenv('MYSQL_PWD'), getenv('MYSQL_PORT'), getenv('MYSQL_DB'), getenv('WEB_SERVER_PORT'), getenv('FORKED_WEB_SERVER_PORT'));
 
         file_put_contents(self::$typechoDir . '/config.inc.php', $configFileContent);
 
@@ -193,6 +196,7 @@ define("IN_PHPUNIT_SERVER", true);
         self::mkdirs($pluginDir);
         copy(__DIR__ . '/../Plugin.php', $pluginDir . '/Plugin.php');
         copy(__DIR__ . '/../Action.php', $pluginDir . '/Action.php');
+        copy(__DIR__ . '/../Util.php', $pluginDir . '/Util.php');
 
         file_put_contents(self::$typechoDir . '/restful.php', "<?php
 require_once __DIR__ . '/index.php';
@@ -212,8 +216,8 @@ call_user_func_array([Typecho_Widget::widget('Widget_Plugins_Edit'), Typecho_Req
     /**
      * 递归删除目录
      *
-     * @param  string  $dirPath 目录路径
-     * @param  boolean $removeOnlyChildren
+     * @param string $dirPath 目录路径
+     * @param boolean $removeOnlyChildren
      * @return void
      */
     private static function deleteDir($dirPath, $removeOnlyChildren = false)
@@ -254,8 +258,8 @@ call_user_func_array([Typecho_Widget::widget('Widget_Plugins_Edit'), Typecho_Req
     /**
      * 创建目录
      *
-     * @param  string  $pathname 目录路径
-     * @param  integer $mode     目录权限
+     * @param string $pathname 目录路径
+     * @param integer $mode 目录权限
      * @return boolean
      */
     private static function mkdirs($pathname, $mode = 0755)

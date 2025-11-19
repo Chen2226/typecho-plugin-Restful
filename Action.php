@@ -48,17 +48,15 @@ class Action extends Request implements ActionInterface
     protected \Typecho\Widget\Request $request;
     protected \Typecho\Widget\Response $response;
 
-
-    protected $version;
     /**
      * @var array
      * 指定路由短名在 POST 时跳过 JSON 解析报错
      * 例如: ['upload', 'anotherRoute']
      */
-    private array $jsonParseSkipRoutes = ['upload'];
+    private array $jsonParseSkipRoutes = array('upload');
 
 
-    public function __construct($request, $response, $params = null)
+    public function __construct($request = null, $response = null, $params = null)
     {
         $typecho_request = TypechoRequest::getInstance();
         parent::__construct($typecho_request, $params);
@@ -68,7 +66,6 @@ class Action extends Request implements ActionInterface
         $this->config = $this->options->plugin('Restful');
         $this->request = $request;
         $this->response = $response;
-        $this->version = \Typecho\Common::VERSION;
     }
 
     /**
@@ -108,7 +105,6 @@ class Action extends Request implements ActionInterface
         $this->sendCORS();
         $this->parseRequest();
 
-        // 1.3不会调用、手动调用方法
         $url = $this->request->getPathInfo();
         $url = str_replace('/api/', '', $url);
         $this->{$url . "Action"}();
@@ -123,16 +119,16 @@ class Action extends Request implements ActionInterface
      */
     private function sendCORS()
     {
-        $httpHost = $this->request->getServer('HTTP_HOST');
+        $httpOrigin = $this->request->getServer('HTTP_ORIGIN');
         $this->response->setHeader('Access-Control-Allow-Credentials', 'true');
         $allowedHttpOrigins = explode("\n", str_replace("\r", "", $this->config->offsetGet('origin')));
 
-        if (!$httpHost) {
+        if (!$httpOrigin) {
             $this->throwError('非法请求！');
         }
 
-        if (in_array($httpHost, $allowedHttpOrigins)) {
-            $this->response->setHeader('Access-Control-Allow-Origin', $httpHost);
+        if (in_array($httpOrigin, $allowedHttpOrigins)) {
+            $this->response->setHeader('Access-Control-Allow-Origin', $httpOrigin);
         }
 
         if (strtolower($this->request->getServer('REQUEST_METHOD')) == 'options') {
@@ -384,11 +380,11 @@ class Action extends Request implements ActionInterface
                 $limit = (int)trim($this->getParams('limit', '200'));
                 $result[$key] = $this->articleFilter($value);
                 $result[$key]['digest'] = mb_substr(
-                        htmlspecialchars_decode(strip_tags($result[$key]['text'])),
-                        0,
-                        $limit,
-                        'utf-8'
-                    ) . "...";
+                    htmlspecialchars_decode(strip_tags($result[$key]['text'])),
+                    0,
+                    $limit,
+                    'utf-8'
+                ) . "...";
             } else {
                 $result[$key] = $this->articleFilter($value);
             }
@@ -807,11 +803,11 @@ class Action extends Request implements ActionInterface
                 $limit = (int)trim($this->getParams('limit', '200'));
                 $post = $this->articleFilter($post);
                 $post['digest'] = mb_substr(
-                        htmlspecialchars_decode(strip_tags($post['text'])),
-                        0,
-                        $limit,
-                        'utf-8'
-                    ) . "...";
+                    htmlspecialchars_decode(strip_tags($post['text'])),
+                    0,
+                    $limit,
+                    'utf-8'
+                ) . "...";
             } else {
                 $post = $this->articleFilter($post);
             }
@@ -873,9 +869,7 @@ class Action extends Request implements ActionInterface
         $this->lockMethod('post');
         $this->checkState('postArticle');
 
-        if ($this->config->validateLogin == 1 && !$this->widget('Widget_User')->hasLogin()) {
-            $this->throwError('User must be logged in', 401);
-        }
+        $this->checkLogin();
 
         $contents = new Contents($this->request, $this->response);
 
@@ -959,9 +953,7 @@ class Action extends Request implements ActionInterface
     {
         $this->lockMethod('post');
         $this->checkState('addMetas');
-        if ($this->config->validateLogin == 1 && !$this->widget('Widget_User')->hasLogin()) {
-            $this->throwError('User must be logged in', 401);
-        }
+        $this->checkLogin();
         $name = $this->getParams('name', '');
         $type = $this->getParams('type', '');
         $slug = $this->getParams('slug', '');
@@ -986,85 +978,12 @@ class Action extends Request implements ActionInterface
     {
         $this->lockMethod('post');
         $this->checkState('upload');
-        if ($this->config->validateLogin == 1 && !$this->widget('Widget_User')->hasLogin()) {
-            $this->throwError('User must be logged in', 401);
-        }
-        if (empty($_FILES)) {
-            // 兼容前端以 Uint8Array 通过 POST 发送的文件数据
-            // 1) 尝试从请求参数中取
-            $postBytes = $this->request->get('file', null, $exists);
-            $fileNameParam = $this->request->get('fileName') ?: $this->request->get('name');
-
-            // 2) 若取不到，则尝试解析原始请求体（常见于 application/json）
-            if (!$exists || $postBytes === null) {
-                $raw = file_get_contents('php://input');
-                if (is_string($raw) && $raw !== '') {
-                    $json = json_decode($raw, true);
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($json)) {
-                        if (isset($json['file'])) {
-                            $postBytes = $json['file'];
-                        }
-                        if (!$fileNameParam && isset($json['fileName'])) {
-                            $fileNameParam = $json['fileName'];
-                        } elseif (!$fileNameParam && isset($json['name'])) {
-                            $fileNameParam = $json['name'];
-                        }
-                    }
-                }
-            }
-
-            if ($postBytes === null) {
-                $this->throwError('missing file');
-            }
-
-            // 3) 处理可能的多种表示形式
-            // - 数字数组（Uint8Array）
-            // - base64 字符串（data:*;base64,xxx 或纯 base64）
-            // - 纯二进制字符串（不推荐，但做兜底）
-            $binary = null;
-            if (is_array($postBytes)) {
-                if (empty($postBytes)) {
-                    $this->throwError('missing file');
-                }
-                $bytes = array_map(static function ($v) {
-                    $v = (int)$v;
-                    if ($v < 0) $v = 0;
-                    if ($v > 255) $v = 255;
-                    return $v;
-                }, $postBytes);
-                $binary = pack('C*', ...$bytes);
-            } elseif (is_string($postBytes)) {
-                // data URL 或 base64
-                if (strpos($postBytes, 'base64,') !== false) {
-                    $base64 = substr($postBytes, strpos($postBytes, 'base64,') + 7);
-                    $binary = base64_decode($base64, true);
-                } else {
-                    // 尝试按 base64 解码，不合法则当作原始二进制
-                    $decoded = base64_decode($postBytes, true);
-                    $binary = ($decoded !== false) ? $decoded : $postBytes;
-                }
-            } else {
-                $this->throwError('missing file');
-            }
-
-            $name = $fileNameParam ?: 'upload.bin';
-            if ($this->request->isAjax() && $name) {
-                $name = urldecode($name);
-            }
-
-            $file = [
-                'name' => $name,
-                'bytes' => $binary,
-                'size' => strlen($binary),
-            ];
-        } else {
-            $file = array_pop($_FILES);
-            if (!isset($file['error']) || 0 !== (int)$file['error'] || !is_uploaded_file($file['tmp_name'])) {
-                $this->throwError('upload failed');
-            }
-            if ($this->request->isAjax() && isset($file['name'])) {
-                $file['name'] = urldecode($file['name']);
-            }
+        $this->checkLogin();
+        $file = '';
+        try {
+            $file = Util::getUploadFile($_FILES, $this->request);
+        } catch (\Exception $e) {
+            $this->throwError($e->getMessage());
         }
         $cid = $this->request->get('cid');
         $authorId = $this->request->get('authorId');
@@ -1073,7 +992,7 @@ class Action extends Request implements ActionInterface
             $this->throwError('upload handle failed');
         }
         $u = new Upload($this->request, $this->response);
-        $struct = [
+        $struct = array(
             'title' => $result['name'],
             'slug' => $result['name'],
             'type' => 'attachment',
@@ -1082,28 +1001,28 @@ class Action extends Request implements ActionInterface
             'allowComment' => 1,
             'allowPing' => 0,
             'allowFeed' => 1
-        ];
-        if (!empty($cid)) $struct['parent'] = $cid;
-        if (!empty($authorId)) $struct['authorId'] = $authorId;
+        );
+        if (!empty($cid)) {
+            $struct['parent'] = $cid;
+        }
+        if (!empty($authorId)) {
+            $struct['authorId'] = $authorId;
+        }
         $insertId = $u->insert($struct);
         $this->db->fetchRow(
             $u->select()->where('table.contents.cid = ?', $insertId)
                 ->where('table.contents.type = ?', 'attachment'),
-            [$u, 'push']
+            array($u, 'push')
         );
-        $payload = [
-            $u->attachment->url,
-            [
-                'cid' => $insertId,
-                'title' => $u->attachment->name,
-                'type' => $u->attachment->type,
-                'size' => $u->attachment->size,
-                'bytes' => number_format(ceil($u->attachment->size / 1024)) . ' Kb',
-                'isImage' => $u->attachment->isImage,
-                'url' => $u->attachment->url,
-                'permalink' => $u->permalink
-            ]
-        ];
+        $payload = array(
+            'cid' => $insertId,
+            'title' => $result['name'],
+            'type' => $result['type'],
+            'size' => $result['size'],
+            'bytes' => number_format(ceil($result['size'] / 1024)) . ' Kb',
+            'url' => $result['path'],
+            'host' => (defined('__TYPECHO_UPLOAD_URL__') ? __TYPECHO_UPLOAD_URL__ : $this->options->siteUrl)
+        );
         $this->throwData($payload);
     }
 
@@ -1114,9 +1033,7 @@ class Action extends Request implements ActionInterface
     {
         $this->lockMethod('post');
         $this->checkState('deleteFile');
-        if ($this->config->validateLogin == 1 && !$this->widget('Widget_User')->hasLogin()) {
-            $this->throwError('User must be logged in', 401);
-        }
+        $this->checkLogin();
         $cid = $this->getParams('cid');
         if (empty($cid)) {
             $this->throwError('missing cid');
@@ -1134,7 +1051,7 @@ class Action extends Request implements ActionInterface
         if ($affected <= 0) {
             $this->throwError('delete db failed', 500);
         }
-        $this->throwData(['deleted' => true, 'cid' => (int)$cid]);
+        $this->throwData(array('deleted' => true, 'cid' => (int)$cid));
     }
 
     /**
@@ -1150,7 +1067,7 @@ class Action extends Request implements ActionInterface
         $authorId = (int)$this->request->get('authorId');
         $offset = ($page - 1) * $pageSize;
 
-        $countQuery = $this->db->select(['COUNT(1)' => 'num'])->from('table.contents')
+        $countQuery = $this->db->select(array('COUNT(1)' => 'num'))->from('table.contents')
             ->where('type = ?', 'attachment');
         if ($authorId > 0) {
             $countQuery->where('authorId = ?', $authorId);
@@ -1168,9 +1085,9 @@ class Action extends Request implements ActionInterface
 
         $rows = $this->db->fetchAll($listQuery);
 
-        $list = [];
+        $list = array();
         foreach ($rows as $r) {
-            $meta = [];
+            $meta = array();
             if (!empty($r['text'])) {
                 $decoded = json_decode($r['text'], true);
                 if (is_array($decoded)) {
@@ -1180,13 +1097,13 @@ class Action extends Request implements ActionInterface
             $url = null;
             if (isset($meta['path'])) {
                 $cfg = new \Typecho\Config($meta);
-                if (version_compare($this->version, '1.3.0', '>=')) {
+                if (version_compare(\Typecho\Common::VERSION, '1.3.0', '>=')) {
                     $url = \Widget\Upload::attachmentHandle($cfg);
                 } else {
                     $url = \Widget\Upload::attachmentHandle($cfg->toArray());
                 }
             }
-            $list[] = [
+            $list[] = array(
                 'cid' => (int)$r['cid'],
                 'title' => $r['title'],
                 'size' => isset($meta['size']) ? (int)$meta['size'] : null,
@@ -1197,16 +1114,16 @@ class Action extends Request implements ActionInterface
                 'created' => (int)$r['created'],
                 'createdAt' => date('Y-m-d H:i:s', (int)$r['created']),
                 'authorId' => (int)$r['authorId'],
-            ];
+            );
         }
 
-        $this->throwData([
+        $this->throwData(array(
             'dataSet' => $list,
             'page' => $page,
             'pageSize' => $pageSize,
             'count' => $count,
             'pages' => (int)ceil($count / $pageSize),
-        ]);
+        ));
     }
 
     /**
@@ -1218,18 +1135,13 @@ class Action extends Request implements ActionInterface
     {
         $this->lockMethod('get');
 
-        $isAdmin = call_user_func(function () {
-            $hasLogin = $this->widget('Widget_User')->hasLogin();
-            $isAdmin = false;
-            if (!$hasLogin) {
-                return false;
-            }
-            $isAdmin = $this->widget('Widget_User')->pass('administrator', true);
-            return $isAdmin;
-        }, $this);
-
-        if (!$isAdmin) {
-            $this->throwError('must be admin');
+        $user = $this->widget('Widget_User');
+        $hasLogin = $user->hasLogin();
+        if (!$hasLogin) {
+            $this->throwError('must be admin', 403);
+        }
+        if (!$user->pass('administrator', true)) {
+            $this->throwError('must be admin', 403);
         }
 
         $localPluginPath = __DIR__ . '/Plugin.php';
@@ -1402,6 +1314,16 @@ class Action extends Request implements ActionInterface
     private function checkCsrfToken($key, $token)
     {
         return hash_equals($token, $this->generateCsrfToken($key));
+    }
+
+    /**
+     * 检测登录状态
+     */
+    public function checkLogin()
+    {
+        if ($this->config->validateLogin == 1 && !$this->widget('Widget_User')->hasLogin()) {
+            $this->throwError('User must be logged in', 401);
+        }
     }
 
     /**

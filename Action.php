@@ -245,12 +245,8 @@ class Action extends Request implements ActionInterface
             $this->throwError('This API has been disabled.', 403);
         }
         $token = $this->request->getHeader('token');
-        // 为空不校验
-        if (!empty($this->config->apiToken)) {
-            // 校验token
-            if (empty($token) || $token != $this->config->apiToken) {
-                $this->throwError('apiToken is invalid', 403);
-            }
+        if ($this->config->apiToken && $token != $this->config->apiToken) {
+            $this->throwError('apiToken is invalid', 403);
         }
     }
 
